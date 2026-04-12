@@ -4,6 +4,7 @@
 import time 
 import json
 import datetime
+import numpy as np
 
 import torch 
 
@@ -127,5 +128,40 @@ class DetSolver(BaseSolver):
                 
         if self.output_dir:
             dist_utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
+        
+        # ---------------- 增加：提取并打印每个类别的 AP 指标 ----------------
+        try:
+            if dist_utils.is_main_process() and coco_evaluator is not None:
+                coco_eval = coco_evaluator.coco_eval.get('bbox')
+                if coco_eval is not None:
+                    # 获取底层的精度评估矩阵
+                    precisions = coco_eval.eval['precision']
+                    catIds = coco_eval.params.catIds
+                    cats = coco_eval.cocoGt.loadCats(catIds)
+
+                    print("\n" + "="*65)
+                    print(f"{'Category':<20} | {'mAP@0.5:0.95':<18} | {'mAP@0.5':<18}")
+                    print("-" * 65)
+
+                    for i, cat in enumerate(cats):
+                        # precisions 矩阵维度: [T(IoU), R(Recall), K(类别), A(面积), M(最大检测数)]
+                        # T=:, R=:, K=i, A=0(所有面积), M=-1(当前配置的最大检测数)
+                        
+                        # 计算当前类别的 mAP@0.5:0.95
+                        p_map = precisions[:, :, i, 0, -1]
+                        p_map = p_map[p_map > -1] # -1 代表该类别在GT中不存在，需过滤
+                        ap_map = np.mean(p_map) if len(p_map) > 0 else 0.0
+
+                        # 计算当前类别的 AP50 (T=0 代表 IoU=0.5)
+                        p_50 = precisions[0, :, i, 0, -1]
+                        p_50 = p_50[p_50 > -1]
+                        ap_50 = np.mean(p_50) if len(p_50) > 0 else 0.0
+
+                        print(f"{cat['name']:<20} | {ap_map:<18.3f} | {ap_50:<18.3f}")
+                    print("="*65 + "\n")
+        except Exception as e:
+            if dist_utils.is_main_process():
+                print(f"\n[Warning] 无法提取单类别指标: {e}")
+        # --------------------------------------------------------------
         
         return

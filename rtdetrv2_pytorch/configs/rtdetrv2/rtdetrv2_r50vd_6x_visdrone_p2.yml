@@ -1,0 +1,71 @@
+__include__: [
+  '../dataset/visdrone_detection.yml', # 确保名字与你保存的数据集配置文件一致
+  '../runtime.yml',
+  './include/dataloader.yml',
+  './include/optimizer.yml',
+  './include/rtdetrv2_r50vd.yml',
+]
+
+output_dir: ./output/rtdetrv2_r50vd_6x_visdrone_p2
+
+# =======================================================
+# 模型架构覆盖：正式引入 P2 层 (Stride 4)
+# =======================================================
+# 【关键修复】明确告诉系统，使用咱们的 P2 Encoder 和官方的 v2 Decoder！
+RTDETR:
+  encoder: HybridEncoderP2
+  decoder: RTDETRTransformerv2
+
+PResNet:
+  return_idx: [0, 1, 2, 3]
+
+# 【极度重要】类名必须是 HybridEncoderP2
+HybridEncoderP2: 
+  in_channels: [256, 512, 1024, 2048] 
+  feat_strides: [4, 8, 16, 32] # 【新增】明确 4 个特征层的步长
+  hidden_dim: 256
+  expansion: 1.0
+
+# 【关键修复】类名必须改为 v2，并配置 4 层特征的维度和步长
+RTDETRTransformerv2:
+  num_classes: 10
+  num_levels: 4  # v2 版本使用 num_levels 参数
+  feat_channels: [256, 256, 256, 256] # 对应 P2, P3, P4, P5 的维度
+  feat_strides: [4, 8, 16, 32]        # 加入 P2 的 Stride 4
+  num_points: [4, 4, 4, 4]            # 【终极新增】为 4 个特征层各分配 4 个采样点！
+  num_queries: 900 
+  eval_idx: -1 
+
+# =======================================================
+# 硬件适配 (RTX 3090)
+# =======================================================
+train_dataloader:
+  total_batch_size: 4 # 解决冲突报错
+  num_workers: 16 
+  drop_last: True
+
+val_dataloader:
+  total_batch_size: 8 # 解决冲突报错
+  num_workers: 8
+
+# =======================================================
+# 优化器配置 (适配 BS=4 与 _ema.pth 微调)
+# =======================================================
+optimizer:
+  type: AdamW
+  params: 
+    - 
+      params: '^(?=.*backbone)(?!.*norm).*$'
+      lr: 0.000005 # 主干网络学习率：极小 (原 0.00001 的一半)
+    - 
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+
+  lr: 0.000025 # 基础学习率：除以 4 (原 0.0001 -> 0.000025)
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+# =======================================================
+# 训练周期
+# =======================================================
+epoches: 90 # 微调 VisDrone 的推荐轮数
