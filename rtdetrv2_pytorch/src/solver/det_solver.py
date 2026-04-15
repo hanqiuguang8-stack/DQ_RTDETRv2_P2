@@ -5,6 +5,7 @@ import time
 import json
 import datetime
 import numpy as np
+from pathlib import Path
 
 import torch 
 
@@ -129,39 +130,75 @@ class DetSolver(BaseSolver):
         if self.output_dir:
             dist_utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
         
-        # ---------------- 增加：提取并打印每个类别的 AP 指标 ----------------
+        # ---------------- 增加：提取打印每个类别的指标，并绘制单独的 PR 曲线 ----------------
         try:
             if dist_utils.is_main_process() and coco_evaluator is not None:
                 coco_eval = coco_evaluator.coco_eval.get('bbox')
                 if coco_eval is not None:
-                    # 获取底层的精度评估矩阵
+                    # 获取底层数据
                     precisions = coco_eval.eval['precision']
                     catIds = coco_eval.params.catIds
                     cats = coco_eval.cocoGt.loadCats(catIds)
+                    
+                    # 生成用于绘图的 Recall 点 (COCO 默认 101 个点)
+                    recalls = np.linspace(0, 1, 101)
 
                     print("\n" + "="*65)
                     print(f"{'Category':<20} | {'mAP@0.5:0.95':<18} | {'mAP@0.5':<18}")
                     print("-" * 65)
 
+                    # 创建图表保存目录
+                    # 兼容 python 的 pathlib
+                    save_dir = Path(self.cfg.output_dir) if isinstance(self.cfg.output_dir, str) else self.output_dir
+                    plot_dir = save_dir / "evaluation_plots"
+                    plot_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    import matplotlib.pyplot as plt
+
                     for i, cat in enumerate(cats):
-                        # precisions 矩阵维度: [T(IoU), R(Recall), K(类别), A(面积), M(最大检测数)]
-                        # T=:, R=:, K=i, A=0(所有面积), M=-1(当前配置的最大检测数)
+                        cat_name = cat['name']
                         
-                        # 计算当前类别的 mAP@0.5:0.95
+                        # --- 1. 计算控制台打印的 mAP 数值 ---
                         p_map = precisions[:, :, i, 0, -1]
-                        p_map = p_map[p_map > -1] # -1 代表该类别在GT中不存在，需过滤
-                        ap_map = np.mean(p_map) if len(p_map) > 0 else 0.0
+                        p_map_valid = p_map[p_map > -1] 
+                        ap_map = np.mean(p_map_valid) if len(p_map_valid) > 0 else 0.0
 
-                        # 计算当前类别的 AP50 (T=0 代表 IoU=0.5)
-                        p_50 = precisions[0, :, i, 0, -1]
-                        p_50 = p_50[p_50 > -1]
-                        ap_50 = np.mean(p_50) if len(p_50) > 0 else 0.0
+                        p_50 = precisions[0, :, i, 0, -1] # T=0 (IoU=0.5)
+                        p_50_valid = p_50[p_50 > -1]
+                        ap_50 = np.mean(p_50_valid) if len(p_50_valid) > 0 else 0.0
 
-                        print(f"{cat['name']:<20} | {ap_map:<18.3f} | {ap_50:<18.3f}")
+                        print(f"{cat_name:<20} | {ap_map:<18.3f} | {ap_50:<18.3f}")
+                        
+                        # --- 2. 绘制并保存当前类别的独立 PR 曲线 ---
+                        plt.figure(figsize=(8, 6))
+                        
+                        # p_50 就是 IoU=0.5 时的 Precision 数组，长度与 recalls 对应
+                        valid_mask = p_50 > -1
+                        if valid_mask.any():
+                            plt.plot(recalls[valid_mask], p_50[valid_mask], 
+                                     label=f'{cat_name} (AP@0.5={ap_50:.3f})', 
+                                     color='#1f77b4', linewidth=2)
+                        
+                        plt.title(f'PR Curve: {cat_name.upper()} @ IoU=0.50', fontsize=16)
+                        plt.xlabel('Recall', fontsize=14)
+                        plt.ylabel('Precision', fontsize=14)
+                        plt.xlim([0.0, 1.0])
+                        plt.ylim([0.0, 1.05])
+                        plt.grid(True, linestyle='--', alpha=0.6)
+                        plt.legend(loc='lower left', fontsize=12)
+                        plt.tight_layout()
+                        
+                        # 保存图像，文件名包含类别名
+                        file_path = plot_dir / f"PR_Curve_IoU50_{cat_name.replace(' ', '_')}.png"
+                        plt.savefig(file_path, dpi=300)
+                        plt.close()
+
                     print("="*65 + "\n")
+                    print(f"[Info] 所有类别的独立 PR 曲线已保存至: {plot_dir}")
+                    
         except Exception as e:
             if dist_utils.is_main_process():
-                print(f"\n[Warning] 无法提取单类别指标: {e}")
+                print(f"\n[Warning] 无法提取单类别指标或绘图: {e}")
         # --------------------------------------------------------------
         
         return
