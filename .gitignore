@@ -1,3 +1,4 @@
+# Model weights and exported binaries
 *.pth
 *.pt
 *.ckpt
@@ -6,9 +7,33 @@
 *.pdparams
 *.pdopt
 
+# Python cache
 __pycache__/
 *.py[cod]
+*$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments and local environment files
+.env
+.envrc
+.venv/
+env/
+venv/
+ENV/
+
+# Notebook and editor state
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# Experiment runtime binaries
 events.out.tfevents*
 rtdetrv2_pytorch/output/**/eval/*.pth
