@@ -14,9 +14,11 @@ import torch.amp
 from torch.utils.tensorboard import SummaryWriter
 from torch.cuda.amp.grad_scaler import GradScaler
 
+from ..misc import MetricLogger, SmoothedValue
+
 from ..optim import ModelEMA, Warmup
 from ..data import CocoEvaluator
-from ..misc import MetricLogger, SmoothedValue, dist_utils
+from ..misc import dist_utils
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,

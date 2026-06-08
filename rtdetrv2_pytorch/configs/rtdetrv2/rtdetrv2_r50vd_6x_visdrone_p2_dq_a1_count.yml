@@ -1,0 +1,21 @@
+__include__:
+  - ./rtdetrv2_r50vd_6x_visdrone_p2.yml
+
+output_dir: ./output/rtdetrv2_r50vd_6x_visdrone_p2_dq_a1_count
+
+HybridEncoderP2:
+  use_dq: True
+  use_cgfe: False
+  num_count_classes: 4
+  count_bins: [24, 42, 70]
+
+RTDETRTransformerv2:
+  use_dq: True
+  use_dynamic_query: False
+  count_bins: [24, 42, 70]
+  dynamic_query_nums: [300, 500, 900, 1200]
+
+RTDETRCriterionv2:
+  use_count_loss: True
+  count_bins: [24, 42, 70]
+  lambda_count: 0.2

@@ -1,0 +1,14 @@
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.safetensors
+*.pdparams
+*.pdopt
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+events.out.tfevents*
+rtdetrv2_pytorch/output/**/eval/*.pth

@@ -9,10 +9,12 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from proj.RTDETR.rtDETR.rtdetrv2_pytorch.src.core import YAMLConfig
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from typing import Any, Dict, List, Optional
 
-from src.core import YAMLConfig, yaml_utils
+from proj.RTDETR.rtDETR.rtdetrv2_pytorch.src.core import yaml_utils
 
 __all__ = ["profile_stats"]
 

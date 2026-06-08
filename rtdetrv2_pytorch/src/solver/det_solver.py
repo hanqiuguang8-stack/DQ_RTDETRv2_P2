@@ -7,9 +7,11 @@ import datetime
 import numpy as np
 from pathlib import Path
 
-import torch 
+import torch
 
-from ..misc import dist_utils, profiler_utils
+from ..misc import dist_utils 
+
+from ..misc import profiler_utils
 
 from ._solver import BaseSolver
 from .det_engine import train_one_epoch, evaluate

@@ -310,7 +310,11 @@ class RTDETRTransformerv2(nn.Module):
                  eps=1e-2, 
                  aux_loss=True, 
                  cross_attn_method='default', 
-                 query_select_method='default'):
+                 query_select_method='default',
+                 use_dq=False,
+                 use_dynamic_query=False,
+                 count_bins=None,
+                 dynamic_query_nums=None):
         super().__init__()
         assert len(feat_channels) <= num_levels
         assert len(feat_strides) == len(feat_channels)
@@ -328,6 +332,10 @@ class RTDETRTransformerv2(nn.Module):
         self.num_layers = num_layers
         self.eval_spatial_size = eval_spatial_size
         self.aux_loss = aux_loss
+        self.use_dq = use_dq
+        self.use_dynamic_query = use_dynamic_query
+        self.count_bins = count_bins or [20, 80, 200]
+        self.dynamic_query_nums = dynamic_query_nums or [300, 500, 900, 1200]
 
         assert query_select_method in ('default', 'one2many', 'agnostic'), ''
         assert cross_attn_method in ('default', 'discrete'), ''
@@ -480,11 +488,29 @@ class RTDETRTransformerv2(nn.Module):
         return anchors, valid_mask
 
 
+    def _get_dynamic_query_num(self, dq_info):
+        if (not self.use_dq) or (not self.use_dynamic_query) or dq_info is None:
+            return self.num_queries
+
+        count_logits = dq_info.get('count_logits')
+        if count_logits is None:
+            return self.num_queries
+
+        count_level = count_logits.detach().argmax(dim=1)
+        max_level = int(count_level.max().item())
+        max_level = min(max_level, len(self.dynamic_query_nums) - 1)
+        return int(self.dynamic_query_nums[max_level])
+
     def _get_decoder_input(self,
                            memory: torch.Tensor,
                            spatial_shapes,
                            denoising_logits=None,
-                           denoising_bbox_unact=None):
+                           denoising_bbox_unact=None,
+                           query_num=None):
+
+        if query_num is None:
+            query_num = self.num_queries
+        query_num = min(int(query_num), memory.shape[1])
 
         # prepare input for decoder
         if self.training or self.eval_spatial_size is None:
@@ -503,7 +529,7 @@ class RTDETRTransformerv2(nn.Module):
 
         enc_topk_bboxes_list, enc_topk_logits_list = [], []
         enc_topk_memory, enc_topk_logits, enc_topk_bbox_unact = \
-            self._select_topk(output_memory, enc_outputs_logits, enc_outputs_coord_unact, self.num_queries)
+            self._select_topk(output_memory, enc_outputs_logits, enc_outputs_coord_unact, query_num)
             
         if self.training:
             enc_topk_bboxes = F.sigmoid(enc_topk_bbox_unact)
@@ -514,7 +540,7 @@ class RTDETRTransformerv2(nn.Module):
         #     raise NotImplementedError('')
 
         if self.learn_query_content:
-            content = self.tgt_embed.weight.unsqueeze(0).tile([memory.shape[0], 1, 1])
+            content = self.tgt_embed.weight[:query_num].unsqueeze(0).tile([memory.shape[0], 1, 1])
         else:
             content = enc_topk_memory.detach()
             
@@ -551,16 +577,17 @@ class RTDETRTransformerv2(nn.Module):
         return topk_memory, topk_logits, topk_coords
 
 
-    def forward(self, feats, targets=None):
+    def forward(self, feats, targets=None, dq_info=None):
         # input projection and embedding
         memory, spatial_shapes = self._get_encoder_input(feats)
+        query_num = self._get_dynamic_query_num(dq_info)
         
         # prepare denoising training
         if self.training and self.num_denoising > 0:
             denoising_logits, denoising_bbox_unact, attn_mask, dn_meta = \
                 get_contrastive_denoising_training_group(targets, \
                     self.num_classes, 
-                    self.num_queries, 
+                    query_num, 
                     self.denoising_class_embed, 
                     num_denoising=self.num_denoising, 
                     label_noise_ratio=self.label_noise_ratio, 
@@ -569,7 +596,8 @@ class RTDETRTransformerv2(nn.Module):
             denoising_logits, denoising_bbox_unact, attn_mask, dn_meta = None, None, None, None
 
         init_ref_contents, init_ref_points_unact, enc_topk_bboxes_list, enc_topk_logits_list = \
-            self._get_decoder_input(memory, spatial_shapes, denoising_logits, denoising_bbox_unact)
+            self._get_decoder_input(
+                memory, spatial_shapes, denoising_logits, denoising_bbox_unact, query_num=query_num)
 
         # decoder
         out_bboxes, out_logits = self.decoder(
@@ -587,6 +615,11 @@ class RTDETRTransformerv2(nn.Module):
             dn_out_logits, out_logits = torch.split(out_logits, dn_meta['dn_num_split'], dim=2)
 
         out = {'pred_logits': out_logits[-1], 'pred_boxes': out_bboxes[-1]}
+
+        if dq_info is not None:
+            out.update(dq_info)
+            out['dynamic_query_num'] = torch.as_tensor(
+                query_num, device=out['pred_logits'].device, dtype=torch.long)
 
         if self.training and self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(out_logits[:-1], out_bboxes[:-1])

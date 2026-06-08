@@ -8,7 +8,7 @@ import torchvision.transforms as T
 import numpy as np 
 from PIL import Image, ImageDraw
 
-from src.core import YAMLConfig
+from proj.RTDETR.rtDETR.rtdetrv2_pytorch.src.core import YAMLConfig
 
 
 def draw(images, labels, boxes, scores, thrh = 0.6):

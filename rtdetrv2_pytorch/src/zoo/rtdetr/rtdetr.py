@@ -30,11 +30,15 @@ class RTDETR(nn.Module):
         self.encoder = encoder
         
     def forward(self, x, targets=None):
-        x = self.backbone(x)
-        x = self.encoder(x)        
-        x = self.decoder(x, targets)
+        feats = self.backbone(x)
+        enc_out = self.encoder(feats)
 
-        return x
+        if isinstance(enc_out, tuple):
+            feats, dq_info = enc_out
+        else:
+            feats, dq_info = enc_out, None
+
+        return self.decoder(feats, targets, dq_info=dq_info)
     
     def deploy(self, ):
         self.eval()

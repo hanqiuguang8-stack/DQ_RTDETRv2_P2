@@ -10,6 +10,7 @@ import torchvision
 import copy
 
 from .box_ops import box_cxcywh_to_xyxy, box_iou, generalized_box_iou
+from .dq_modules import build_count_targets
 from ...misc.dist_utils import get_world_size, is_dist_available_and_initialized
 from ...core import register
 
@@ -32,7 +33,10 @@ class RTDETRCriterionv2(nn.Module):
         gamma=2.0, 
         num_classes=80, 
         boxes_weight_format=None,
-        share_matched_indices=False):
+        share_matched_indices=False,
+        use_count_loss=False,
+        count_bins=None,
+        lambda_count=0.2):
         """Create the criterion.
         Parameters:
             matcher: module able to compute a matching between targets and proposals
@@ -51,6 +55,9 @@ class RTDETRCriterionv2(nn.Module):
         self.share_matched_indices = share_matched_indices
         self.alpha = alpha
         self.gamma = gamma
+        self.use_count_loss = use_count_loss
+        self.count_bins = count_bins or [20, 80, 200]
+        self.lambda_count = lambda_count
 
     def loss_labels_focal(self, outputs, targets, indices, num_boxes):
         assert 'pred_logits' in outputs
@@ -126,6 +133,23 @@ class RTDETRCriterionv2(nn.Module):
         batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
         tgt_idx = torch.cat([tgt for (_, tgt) in indices])
         return batch_idx, tgt_idx
+
+    def loss_count(self, outputs, targets):
+        if 'count_logits' not in outputs:
+            device = outputs['pred_logits'].device
+            return {'loss_count': torch.as_tensor(0.0, device=device)}
+
+        count_logits = torch.nan_to_num(
+            outputs['count_logits'].float(), nan=0.0, posinf=30.0, neginf=-30.0,
+        ).clamp(min=-30.0, max=30.0)
+        count_targets = build_count_targets(targets, self.count_bins, device=count_logits.device)
+        loss = F.cross_entropy(count_logits, count_targets)
+        if 'density_map' in outputs:
+            density_map = torch.nan_to_num(
+                outputs['density_map'].float(), nan=0.0, posinf=20.0, neginf=-20.0,
+            ).clamp(min=-20.0, max=20.0)
+            loss = loss + density_map.sum() * 0.0
+        return {'loss_count': loss * self.lambda_count}
 
     def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
         loss_map = {
@@ -215,6 +239,9 @@ class RTDETRCriterionv2(nn.Module):
             
             if class_agnostic:
                 self.num_classes = orig_num_classes
+
+        if self.use_count_loss:
+            losses.update(self.loss_count(outputs, targets))
 
         return losses
 

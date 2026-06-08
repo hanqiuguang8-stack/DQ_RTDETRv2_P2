@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F 
 
 from .utils import get_activation
+from .dq_modules import CategoricalCountingModule, DensityGuidedCGFE
 
 from ...core import register
 
@@ -199,6 +200,10 @@ class HybridEncoderP2(nn.Module):
                  expansion=1.0,
                  depth_mult=1.0,
                  act='silu',
+                 use_dq=False,
+                 num_count_classes=4,
+                 count_bins=None,
+                 use_cgfe=True,
                  eval_spatial_size=None, 
                  version='v2'):
         super().__init__()
@@ -208,7 +213,11 @@ class HybridEncoderP2(nn.Module):
         self.use_encoder_idx = use_encoder_idx
         self.num_encoder_layers = num_encoder_layers
         self.pe_temperature = pe_temperature
-        self.eval_spatial_size = eval_spatial_size        
+        self.eval_spatial_size = eval_spatial_size
+        self.use_dq = use_dq
+        self.use_cgfe = use_cgfe
+        self.count_bins = count_bins or [20, 80, 200]
+        self.num_count_classes = num_count_classes
         self.out_channels = [hidden_dim for _ in range(len(in_channels))]
         self.out_strides = feat_strides
         
@@ -240,6 +249,20 @@ class HybridEncoderP2(nn.Module):
         self.encoder = nn.ModuleList([
             TransformerEncoder(copy.deepcopy(encoder_layer), num_encoder_layers) for _ in range(len(use_encoder_idx))
         ])
+
+        if self.use_dq:
+            self.ccm = CategoricalCountingModule(
+                in_channels=hidden_dim,
+                hidden_channels=hidden_dim,
+                num_count_classes=num_count_classes,
+            )
+            self.cgfe = (
+                DensityGuidedCGFE(num_levels=len(in_channels), init_alpha=0.5)
+                if self.use_cgfe else None
+            )
+        else:
+            self.ccm = None
+            self.cgfe = None
 
         # top-down fpn
         self.lateral_convs = nn.ModuleList()
@@ -291,6 +314,15 @@ class HybridEncoderP2(nn.Module):
     def forward(self, feats):
         assert len(feats) == len(self.in_channels)
         proj_feats = [self.input_proj[i](feat) for i, feat in enumerate(feats)]
+
+        dq_info = None
+        density_map = None
+        if self.use_dq:
+            count_logits, density_map, _ = self.ccm(proj_feats[0])
+            dq_info = {
+                'count_logits': count_logits,
+                'density_map': density_map,
+            }
         
         # encoder (Transformer Attention 仅作用于 use_encoder_idx 指定的层级，现在只有索引 3)
         if self.num_encoder_layers > 0:
@@ -324,5 +356,11 @@ class HybridEncoderP2(nn.Module):
             downsample_feat = self.downsample_convs[idx](feat_low)
             out = self.pan_blocks[idx](torch.concat([downsample_feat, feat_height], dim=1))
             outs.append(out)
+
+        if self.use_dq and self.use_cgfe:
+            outs = self.cgfe(outs, density_map)
+
+        if self.use_dq:
+            return outs, dq_info
 
         return outs

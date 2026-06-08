@@ -3,12 +3,14 @@
 
 import os
 import sys
+
+from proj.RTDETR.rtDETR.rtdetrv2_pytorch.src.core import YAMLConfig
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 import torch
 import torch.nn as nn
 
-from src.core import YAMLConfig, yaml_utils
+from proj.RTDETR.rtDETR.rtdetrv2_pytorch.src.core import yaml_utils
 
 
 def main(args, ):
